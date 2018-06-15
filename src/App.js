@@ -1,5 +1,10 @@
 import React, { Component } from 'react';
 import PropTypes from 'prop-types';
+
+import IPFS from 'ipfs';
+import Room from 'ipfs-pubsub-room';
+import _ from 'lodash';
+
 import { withStyles } from '@material-ui/core/styles';
 import AppBar from '@material-ui/core/AppBar';
 import Toolbar from '@material-ui/core/Toolbar';
@@ -14,9 +19,12 @@ import LinearProgress from '@material-ui/core/LinearProgress';
 import Input from '@material-ui/core/Input';
 import InputLabel from '@material-ui/core/InputLabel';
 import FormControl from '@material-ui/core/FormControl';
+import Select from '@material-ui/core/Select';
+import List from '@material-ui/core/List';
+import ListItem from '@material-ui/core/ListItem';
+import ListItemText from '@material-ui/core/ListItemText';
 
-import IPFS from 'ipfs';
-import Room from 'ipfs-pubsub-room';
+import theme from './theme';
 
 const styles = theme => ({
   root: {
@@ -46,39 +54,68 @@ class App extends Component {
     this.ipfs = new IPFS(ipfsOptions);
     this.state = {
       info: null,
-      selectedAddress: '',
+      address: '',
       message: '',
-      messages: []
+      messages: [],
+      selectedPeer: '',
+      peers: []
     }
+
+    this.handleMessage = this.handleMessage.bind(this);
+    this.handleBroadcast = this.handleBroadcast.bind(this);
+    this.selectPeer = this.selectPeer.bind(this);
   }
 
   componentWillMount() {
     this.ipfs.once('ready', () => this.ipfs.id((err, info) => {
-      console.log('info: ', info);
       if (err) { throw err }
       this.setState({ info });
 
       this.room = Room(this.ipfs, 'ipfs-pubsub-demo');
-      this.room.on('peer joined', (peer) => { 
+      this.room.on('peer joined', (peer) => {
+        // Notify Peer has Joined
         console.log(peer + ' has joined');
-        this.room.sendTo(peer, 'Hello ' + peer + '!')
+        this.room.sendTo(peer, 'Hello ' + peer + '!');
+
+        // Update Peers
+        let updatedPeers = this.state.peers;
+        updatedPeers.push(peer);
+        this.setState({ peers: _.uniq(updatedPeers) });
+        if (this.state.peers.length === 1) {
+          this.setState({ selectedPeer: peer });
+        }
       });
-      this.room.on('peer left', (peer) => console.log(peer + ' has left'));
-      this.room.on('message', (message) => console.log(`From: ${message.from}\nBody: ${message.data.toString()}`));
+
+      this.room.on('peer left', (peer) => {
+        // Notify Peer has Left
+        console.log(peer + ' has left');
+      });
+      this.room.on('message', (message) => {
+        // Update Messages
+        let updatedMessages = this.state.messages;
+        updatedMessages.push(message);
+        this.setState({ messages: _.uniq(updatedMessages) });
+      });
     }))
   }
 
   handleMessage = event => {
-    this.room.sendTo(this.state.selectedAddress, this.state.message);
+    this.room.sendTo(this.state.selectedPeer, this.state.message);
   }
 
   handleBroadcast = event => {
     this.room.broadcast(this.state.message);
   }
 
+  selectPeer = event => {
+    this.setState({
+      selectedPeer: event.target.value
+    });
+  };
+
   render() {
     const { classes } = this.props;
-    const { info, selectedAddress, message, messages } = this.state;
+    const { info, message, messages, selectedPeer, peers } = this.state;
 
     return (
       <div className={classes.root}>
@@ -90,29 +127,85 @@ class App extends Component {
           </Toolbar>
         </AppBar>
 
-        { info != null ? 
+        {info != null ?
           <Grid container alignItems={'center'} justify={'center'} spacing={24} style={{ padding: 24 }}>
             <Grid item xs={8}>
               <Card>
+                <CardHeader title="My Information" />
                 <CardContent>
-                  <Typography gutterBottom variant="headline" component="h4">
-                    My Information
-                  </Typography>
                   <FormControl fullWidth style={{ marginBottom: '16px' }}>
                     <InputLabel htmlFor="id">ID</InputLabel>
                     <Input id="id" value={info.id} />
                   </FormControl>
                   <FormControl fullWidth style={{ marginBottom: '16px' }}>
                     <InputLabel htmlFor="publicKey">Public Key</InputLabel>
-                    <Input id="publicKey" multiline={true} value={info.publicKey} />
+                    <Input id="publicKey" multiline value={info.publicKey} />
+                  </FormControl>
+                </CardContent>
+              </Card>
+            </Grid>
+            {messages.length > 0 &&
+              <Grid item xs={8}>
+                <Card>
+                  <CardHeader title="Messages" />
+                  <CardContent>
+                    <List dense={false} style={{ padding: 0 }}>
+                      {messages.map(message => (
+                        <ListItem
+                          key={messages.indexOf(message)}
+                          divider
+                          disableGutters
+                        >
+                          <ListItemText
+                            primary={message.from}
+                            secondary={message.data.toString()}
+                          />
+                        </ListItem>
+                      ))}
+                    </List>
+                  </CardContent>
+                </Card>
+              </Grid>
+            }
+            <Grid item xs={8}>
+              <Card>
+                <CardHeader title="Compose Message" />
+                <CardContent>
+                  {peers.length > 0 &&
+                    <FormControl fullWidth style={{ marginBottom: '16px' }}>
+                      <Select
+                        native
+                        onChange={this.selectPeer}
+                        input={<Input id="uncontrolled-native" />}
+                      >
+                        {peers.map(peer => (
+                          <option
+                            key={peer}
+                            value={peer}
+                            style={{
+                              fontWeight:
+                                selectedPeer !== peer
+                                  ? theme.typography.fontWeightRegular
+                                  : theme.typography.fontWeightMedium
+                            }}
+                          >
+                            {peer}
+                          </option>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  }
+                  <FormControl fullWidth style={{ marginBottom: '16px' }}>
+                    <InputLabel htmlFor="message">My Message</InputLabel>
+                    <Input id="message" multiline={true} value={message} onChange={(e) => this.setState({ message: e.target.value })} />
                   </FormControl>
                 </CardContent>
                 <CardActions>
-                  <Button size="small" color="primary">
-                    Share
+                  <Button size="small" color="primary" disabled={peers.length === 0 || selectedPeer === '' || message.trim().length === 0} onClick={(e) => this.handleMessage(e)}>
+                    Send Message
                   </Button>
-                  <Button size="small" color="primary">
-                    Learn More
+                  <Button size="small" color="primary" disabled={peers.length === 0 || message.trim().length === 0} onClick={(e) => this.handleBroadcast(e)}>
+                    Send Broadcast
                   </Button>
                 </CardActions>
               </Card>
@@ -122,33 +215,6 @@ class App extends Component {
         }
       </div>
     );
-    // return (
-    //   <div className="App">
-    //     <header className="App-header">
-    //       <img src={logo} className="App-logo" alt="logo" />
-    //       <h1 className="App-title">Welcome to React</h1>
-    //     </header>
-    //     <p>My topics: {topics}</p>
-    //     <form onSubmit={this.handleMessage}>
-    //       <label>
-    //         Node Address
-    //         <input type="text" value={selectedAddress} onChange={(e) => this.setState({ selectedAddress: e.target.value })} />
-    //       </label>
-    //       <label>
-    //         Message
-    //         <input type="text" value={message} onChange={(e) => this.setState({ message: e.target.value })} />
-    //       </label>
-    //       <input type="submit" value="Send Message" />
-    //     </form>
-    //     <form onSubmit={this.handleBroadcast}>
-    //       <label>
-    //         Message
-    //         <input type="text" value={message} onChange={(e) => this.setState({ message: e.target.value })} />
-    //       </label>
-    //       <input type="submit" value="Send Broadcast" />
-    //     </form>
-    //   </div>
-    // );
   }
 }
 
