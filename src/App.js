@@ -6,49 +6,57 @@ import Room from 'ipfs-pubsub-room';
 import logo from './logo.svg';
 import './App.css';
 
+const ipfsOptions = {
+  EXPERIMENTAL: {
+    pubsub: true
+  },
+  config: {
+    Addresses: {
+      Swarm: [
+        "/dns4/ws-star.discovery.libp2p.io/tcp/443/wss/p2p-websocket-star"
+      ]
+    }
+  }
+};
+
 class App extends Component {
   constructor(props) {
     super(props);
-    this.ipfs = new IPFS({
-      EXPERIMENTAL: {
-        pubsub: true
-      },
-      config: {
-        Addresses: {
-          Swarm: [
-            "/dns4/ws-star.discovery.libp2p.io/tcp/443/wss/p2p-websocket-star",
-            "/dns4/ams-1.bootstrap.libp2p.io/tcp/443/wss/ipfs/QmSoLer265NRgSp2LA3dPaeykiS1J6DifTC88f5uVQKNAd",
-            "/dns4/sfo-1.bootstrap.libp2p.io/tcp/443/wss/ipfs/QmSoLju6m7xTh3DuokvT3886QRYqxAzb1kShaanJgW36yx",
-            "/dns4/lon-1.bootstrap.libp2p.io/tcp/443/wss/ipfs/QmSoLMeWqB7YGVLJN3pNLQpmmEk35v6wYtsMGLzSr5QBU3",
-            "/dns4/sfo-2.bootstrap.libp2p.io/tcp/443/wss/ipfs/QmSoLnSGccFuZQJzRadHn95W2CrSFmZuTdDWP8HXaHca9z",
-            "/dns4/sfo-3.bootstrap.libp2p.io/tcp/443/wss/ipfs/QmSoLPppuBtQSGwKDZT2M73ULpjvfd3aZ6ha4oFGL1KrGM",
-            "/dns4/sgp-1.bootstrap.libp2p.io/tcp/443/wss/ipfs/QmSoLSafTMBsPKadTEgaXctDQVcqN88CNLHXMkTNwMKPnu",
-            "/dns4/nyc-1.bootstrap.libp2p.io/tcp/443/wss/ipfs/QmSoLueR4xBeUbY9WZ9xGUUxunbKWcrNFTDAadQJmocnWm",
-            "/dns4/nyc-2.bootstrap.libp2p.io/tcp/443/wss/ipfs/QmSoLV4Bbm51jM9C4gDYZQ9Cy3U6aXMJDAbzgu2fzaDs64"
-          ]
-        }
-      }
-    });
+    this.ipfs = new IPFS(ipfsOptions);
+    this.state = { 
+      address: '',
+      message: '',
+      topics: []
+    }
+
+    this.handleMessage = this.handleMessage.bind(this);
+    this.handleBroadcast = this.handleBroadcast.bind(this);
+  }
+
+  handleMessage(event) {
+    event.preventDefault();
+    this.room.sendTo(this.state.address, this.state.message);
+  }
+
+  handleBroadcast(event) {
+    event.preventDefault();
+    this.room.broadcast(this.state.message);
   }
 
   componentWillMount() {
     this.ipfs.once('ready', () => this.ipfs.id((err, info) => {
       if (err) { throw err }
-      console.log('IPFS node ready with address ' + info.id)
+      console.log('My address: ' + info.id);
 
-      const room = Room(this.ipfs, 'ipfs-pubsub-demo')
+      this.room = Room(this.ipfs, 'ipfs-pubsub-demo');
 
-      room.on('peer joined', (peer) => console.log('peer ' + peer + ' joined'))
-      room.on('peer left', (peer) => console.log('peer ' + peer + ' left'))
+      this.room.on('peer joined', (peer) => { 
+        console.log(peer + ' has joined');
+        this.room.sendTo(peer, 'Hello ' + peer + '!')
+      });
+      this.room.on('peer left', (peer) => console.log(peer + ' has left'));
 
-      // send and receive messages
-
-      room.on('peer joined', (peer) => room.sendTo(peer, 'Hello ' + peer + '!'))
-      room.on('message', (message) => console.log('got message from ' + message.from + ': ' + message.data.toString()))
-
-      // broadcast message every 2 seconds
-
-      setInterval(() => room.broadcast('hey everyone!'), 2000)
+      this.room.on('message', (message) => console.log(`From: ${message.from}\nBody: ${message.data.toString()}`));
     }))
   }
 
@@ -59,9 +67,25 @@ class App extends Component {
           <img src={logo} className="App-logo" alt="logo" />
           <h1 className="App-title">Welcome to React</h1>
         </header>
-        <p className="App-intro">
-          To get started, edit <code>src/App.js</code> and save to reload.
-        </p>
+        <p>My topics: {this.state.topics}</p>
+        <form onSubmit={this.handleMessage}>
+          <label>
+            Node Address
+            <input type="text" value={this.state.address} onChange={(e) => this.setState({ address: e.target.value })} />
+          </label>
+          <label>
+            Message
+            <input type="text" value={this.state.message} onChange={(e) => this.setState({ message: e.target.value })} />
+          </label>
+          <input type="submit" value="Send Message" />
+        </form>
+        <form onSubmit={this.handleBroadcast}>
+          <label>
+            Message
+            <input type="text" value={this.state.message} onChange={(e) => this.setState({ message: e.target.value })} />
+          </label>
+          <input type="submit" value="Send Broadcast" />
+        </form>
       </div>
     );
   }
