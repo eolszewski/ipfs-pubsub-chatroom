@@ -54,11 +54,13 @@ class App extends Component {
     this.ipfs = new IPFS(ipfsOptions);
     this.state = {
       info: null,
-      address: '',
       message: '',
       messages: [],
       selectedPeer: '',
-      peers: []
+      peers: [],
+      selectedRoom: '',
+      rooms: [],
+      publicKey: Math.random().toString(36).substring(7)
     }
 
     this.handleMessage = this.handleMessage.bind(this);
@@ -67,11 +69,22 @@ class App extends Component {
   }
 
   componentWillMount() {
-    this.ipfs.once('ready', () => this.ipfs.id((err, info) => {
+    this.ipfs.once('ready', () => this.ipfs.id(async (err, info) => {
       if (err) { throw err }
       this.setState({ info });
 
-      this.room = Room(this.ipfs, 'ipfs-pubsub-demo');
+      this.room = Room(this.ipfs, 'transmute-pubsub-demo');
+      this.privateRoom = Room(this.ipfs, this.state.publicKey);
+      let rooms = this.state.rooms;
+      rooms.push(this.room);
+      rooms.push(Room(this.ipfs, this.state.publicKey));
+
+      // TODO: This needs to iterate over all the rooms and set up these methods for each room
+      // Room objects will have: peers, messages, 
+      // It needs to be understood how to associate 'peer joined' and 'peer left' with the room
+      
+      // Honestly, this would be much easier with a mapping of the user's public key to their ethereum key that will be stored in state.
+
       this.room.on('peer joined', (peer) => {
         // Notify Peer has Joined
         console.log(peer + ' has joined');
@@ -91,6 +104,7 @@ class App extends Component {
         console.log(peer + ' has left');
       });
       this.room.on('message', (message) => {
+        console.log('message topicIDs: ', message.topicIDs);
         // Update Messages
         let updatedMessages = this.state.messages;
         updatedMessages.push(message);
@@ -99,10 +113,12 @@ class App extends Component {
     }))
   }
 
+  // TODO: These need to take a room as a parameter
   handleMessage = event => {
     this.room.sendTo(this.state.selectedPeer, this.state.message);
   }
 
+  // TODO: These need to take a room as a parameter
   handleBroadcast = event => {
     this.room.broadcast(this.state.message);
   }

@@ -1,3 +1,5 @@
+Then open a few browsers and get started messaging!
+=======
 # IPFS Pubsub Chatroom
 
 This application is a basic create-react-app with some ui sugar from [Material-UI](https://material-ui-next.com/)
@@ -13,6 +15,7 @@ npm i
 
 To run:
 ```
+npm run build
 npm run start
 ```
 
