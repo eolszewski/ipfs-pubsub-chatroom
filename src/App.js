@@ -4,6 +4,7 @@ import PropTypes from 'prop-types';
 import IPFS from 'ipfs';
 import Room from 'ipfs-pubsub-room';
 import _ from 'lodash';
+import Web3 from 'web3';
 
 import { withStyles } from '@material-ui/core/styles';
 import AppBar from '@material-ui/core/AppBar';
@@ -25,6 +26,7 @@ import ListItem from '@material-ui/core/ListItem';
 import ListItemText from '@material-ui/core/ListItemText';
 
 import theme from './theme';
+import config from './ipfs_pubsub_config';
 
 const styles = theme => ({
   root: {
@@ -35,37 +37,31 @@ const styles = theme => ({
   }
 });
 
-const ipfsOptions = {
-  EXPERIMENTAL: {
-    pubsub: true
-  },
-  config: {
-    Addresses: {
-      Swarm: [
-        "/dns4/ws-star.discovery.libp2p.io/tcp/443/wss/p2p-websocket-star"
-      ]
-    }
-  }
-};
-
 class App extends Component {
   constructor(props) {
     super(props);
-    this.ipfs = new IPFS(ipfsOptions);
+    this.ipfs = new IPFS(config);
+
+    if (typeof window.web3 !== 'undefined') {
+      this.web3 = new Web3(window.web3.currentProvider);
+    }
+
     this.state = {
       info: null,
+      address: null,
+      balance: null,
       message: '',
       messages: [],
-      selectedPeer: '',
-      peers: [],
-      selectedRoom: '',
-      rooms: [],
-      publicKey: Math.random().toString(36).substring(7)
+      selectedPeer: {},
+      peers: {}
     }
 
     this.handleMessage = this.handleMessage.bind(this);
-    this.handleBroadcast = this.handleBroadcast.bind(this);
     this.selectPeer = this.selectPeer.bind(this);
+    this.isIntroductoryMessage = this.isIntroductoryMessage.bind(this);
+    this.updatePeerStatus = this.updatePeerStatus.bind(this);
+    this.updateAddress = this.updateAddress.bind(this);
+    this.getAddressBalance = this.getAddressBalance.bind(this);
   }
 
   componentWillMount() {
@@ -73,54 +69,65 @@ class App extends Component {
       if (err) { throw err }
       this.setState({ info });
 
-      this.room = Room(this.ipfs, 'transmute-pubsub-demo');
-      this.privateRoom = Room(this.ipfs, this.state.publicKey);
-      let rooms = this.state.rooms;
-      rooms.push(this.room);
-      rooms.push(Room(this.ipfs, this.state.publicKey));
+      let accounts = await this.web3.eth.getAccounts();
+      const currentPeerInfo = {
+        id: info.id,
+        address: accounts[0],
+        online: true
+      };
+      this.updateAddress(accounts[0]);
 
-      // TODO: This needs to iterate over all the rooms and set up these methods for each room
-      // Room objects will have: peers, messages, 
-      // It needs to be understood how to associate 'peer joined' and 'peer left' with the room
-      
-      // Honestly, this would be much easier with a mapping of the user's public key to their ethereum key that will be stored in state.
+      let balance = await this.getAddressBalance(accounts[0]);
+      this.setState({ balance });
+
+      this.room = Room(this.ipfs, 'pubsub-payment-channel-demo');
 
       this.room.on('peer joined', (peer) => {
-        // Notify Peer has Joined
-        console.log(peer + ' has joined');
-        this.room.sendTo(peer, 'Hello ' + peer + '!');
+        // Send introductory message to peer
+        this.room.sendTo(peer, JSON.stringify(currentPeerInfo));
+      });
 
-        // Update Peers
-        let updatedPeers = this.state.peers;
-        updatedPeers.push(peer);
-        this.setState({ peers: _.uniq(updatedPeers) });
-        if (this.state.peers.length === 1) {
-          this.setState({ selectedPeer: peer });
-        }
+      this.room.on('peer left', (peer) => {
+        this.updatePeerStatus(peer, false);
       });
 
       this.room.on('peer left', (peer) => {
         // Notify Peer has Left
         console.log(peer + ' has left');
       });
+      
       this.room.on('message', (message) => {
-        console.log('message topicIDs: ', message.topicIDs);
-        // Update Messages
-        let updatedMessages = this.state.messages;
-        updatedMessages.push(message);
-        this.setState({ messages: _.uniq(updatedMessages) });
+        // Check if this is an introductory message
+        if (this.isIntroductoryMessage(message.data.toString())) {
+          // Check if peer is already known
+          if (_.includes(_.keys(this.state.peers), message.from)) {
+            // Known peer, update online status
+            this.updatePeerStatus(message.from, true);
+          } else {
+            // Unknown peer, update peers map
+            let newPeer = JSON.parse(message.data.toString());
+            let updatedPeers = this.state.peers;
+            updatedPeers[message.from] = newPeer;
+            this.setState({ peers: updatedPeers });
+            if (_.keys(this.state.peers).length === 1) {
+              this.setState({ selectedPeer: newPeer });
+            }
+          }
+        } else {
+          // We don't want to broadcast to ourself
+          if (message.from !== info.id) {
+            // Update Messages
+            let updatedMessages = this.state.messages;
+            updatedMessages.push(message);
+            this.setState({ messages: _.uniq(updatedMessages) });
+          }
+        }
       });
     }))
   }
 
-  // TODO: These need to take a room as a parameter
   handleMessage = event => {
-    this.room.sendTo(this.state.selectedPeer, this.state.message);
-  }
-
-  // TODO: These need to take a room as a parameter
-  handleBroadcast = event => {
-    this.room.broadcast(this.state.message);
+    this.room.sendTo(this.state.selectedPeer.id, this.state.message);
   }
 
   selectPeer = event => {
@@ -129,33 +136,63 @@ class App extends Component {
     });
   };
 
+  updatePeerStatus = (peer, status) => {
+    let updatedPeers = this.state.peers;
+    let updatedPeer = updatedPeers[peer];
+    // Update peer's online status
+    updatedPeer.online = status;
+    updatedPeers[peer] = updatedPeer;
+    this.setState({ peers: updatedPeers });
+  };
+
+  isIntroductoryMessage = msg => {
+    try {
+      let parsedMsg = JSON.parse(msg);
+      return _.difference(['address', 'id', 'online'], _.keys(parsedMsg)).length === 0
+    } catch (e) {
+      return false;
+    }
+  }
+
+  updateAddress = (address) => {
+    this.setState({
+      address
+    })
+  }
+
+  getAddressBalance = async address => {
+    let balance = await this.web3.eth.getBalance(address);
+    return this.web3.utils.fromWei(balance, 'ether');
+  }
+
   render() {
     const { classes } = this.props;
-    const { info, message, messages, selectedPeer, peers } = this.state;
+    const { info, message, messages, selectedPeer, peers, address, balance } = this.state;
 
     return (
       <div className={classes.root}>
         <AppBar position="static">
           <Toolbar>
             <Typography variant="title" color="inherit" className={classes.flex}>
-              IPFS Pubsub Chatroom
+              Payment Channels Demo
             </Typography>
           </Toolbar>
         </AppBar>
 
-        {info != null ?
+        {!this.web3 && <p>y u no run metamask?</p>}
+        {this.web3 && info != null && address != null && balance != null ?
           <Grid container alignItems={'center'} justify={'center'} spacing={24} style={{ padding: 24 }}>
             <Grid item xs={8}>
               <Card>
                 <CardHeader title="My Information" />
                 <CardContent>
                   <FormControl fullWidth style={{ marginBottom: '16px' }}>
-                    <InputLabel htmlFor="id">ID</InputLabel>
-                    <Input id="id" value={info.id} />
+                    <InputLabel htmlFor="address">Address</InputLabel>
+                    <Input id="address" value={address} />
                   </FormControl>
                   <FormControl fullWidth style={{ marginBottom: '16px' }}>
-                    <InputLabel htmlFor="publicKey">Public Key</InputLabel>
-                    <Input id="publicKey" multiline value={info.publicKey} />
+                    <InputLabel htmlFor="balance">Balance</InputLabel>
+                    <Input id="balance" value={balance} />
                   </FormControl>
                 </CardContent>
               </Card>
@@ -173,7 +210,7 @@ class App extends Component {
                           disableGutters
                         >
                           <ListItemText
-                            primary={message.from}
+                            primary={peers[message.from].address}
                             secondary={message.data.toString()}
                           />
                         </ListItem>
@@ -187,25 +224,25 @@ class App extends Component {
               <Card>
                 <CardHeader title="Compose Message" />
                 <CardContent>
-                  {peers.length > 0 &&
+                  {_.keys(peers).length > 0 &&
                     <FormControl fullWidth style={{ marginBottom: '16px' }}>
                       <Select
                         native
                         onChange={this.selectPeer}
                         input={<Input id="uncontrolled-native" />}
                       >
-                        {peers.map(peer => (
+                        {_.map(peers, (peer, id) => (
                           <option
-                            key={peer}
-                            value={peer}
+                            key={id}
+                            value={peer.address}
                             style={{
                               fontWeight:
-                                selectedPeer !== peer
+                                selectedPeer.id !== peer.id
                                   ? theme.typography.fontWeightRegular
                                   : theme.typography.fontWeightMedium
                             }}
                           >
-                            {peer}
+                            {`${peer.address} (${peer.online ? 'Online' : 'Offline'})`}
                           </option>
                         ))}
                       </Select>
@@ -217,11 +254,8 @@ class App extends Component {
                   </FormControl>
                 </CardContent>
                 <CardActions>
-                  <Button size="small" color="primary" disabled={peers.length === 0 || selectedPeer === '' || message.trim().length === 0} onClick={(e) => this.handleMessage(e)}>
+                  <Button size="small" color="primary" disabled={_.keys(peers).length === 0 || selectedPeer === null || !selectedPeer.online || message.trim().length === 0} onClick={(e) => this.handleMessage(e)}>
                     Send Message
-                  </Button>
-                  <Button size="small" color="primary" disabled={peers.length === 0 || message.trim().length === 0} onClick={(e) => this.handleBroadcast(e)}>
-                    Send Broadcast
                   </Button>
                 </CardActions>
               </Card>
