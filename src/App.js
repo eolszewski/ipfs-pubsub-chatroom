@@ -24,9 +24,12 @@ import Select from '@material-ui/core/Select';
 import List from '@material-ui/core/List';
 import ListItem from '@material-ui/core/ListItem';
 import ListItemText from '@material-ui/core/ListItemText';
-
+ 
 import theme from './theme';
 import config from './ipfs_pubsub_config';
+
+const SimplePaymentChannelArtifact = require('./contracts/SimplePaymentChannel.json');
+const utils = require('./utils.js');
 
 const styles = theme => ({
   root: {
