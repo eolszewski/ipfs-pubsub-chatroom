@@ -5,6 +5,7 @@ import IPFS from 'ipfs';
 import Room from 'ipfs-pubsub-room';
 import _ from 'lodash';
 import Web3 from 'web3';
+import contract from 'truffle-contract';
 
 import { withStyles } from '@material-ui/core/styles';
 import AppBar from '@material-ui/core/AppBar';
@@ -27,9 +28,9 @@ import ListItemText from '@material-ui/core/ListItemText';
  
 import theme from './theme';
 import config from './ipfs_pubsub_config';
+import utils from './utils';
 
 const SimplePaymentChannelArtifact = require('./contracts/SimplePaymentChannel.json');
-const utils = require('./utils.js');
 
 const styles = theme => ({
   root: {
@@ -47,24 +48,32 @@ class App extends Component {
 
     if (typeof window.web3 !== 'undefined') {
       this.web3 = new Web3(window.web3.currentProvider);
+      this.simplePaymentChannelContract = contract(SimplePaymentChannelArtifact);
+      this.simplePaymentChannelContract.setProvider(this.web3.currentProvider);
     }
 
     this.state = {
       info: null,
+      amount: 0,
       address: null,
+      channelAddress: null,
       balance: null,
+      channelBalance: null,
       message: '',
       messages: [],
       selectedPeer: {},
-      peers: {}
+      peers: {},
+      receiver: false
     }
 
-    this.handleMessage = this.handleMessage.bind(this);
+    this.createSignature = this.createSignature.bind(this);
     this.selectPeer = this.selectPeer.bind(this);
     this.isIntroductoryMessage = this.isIntroductoryMessage.bind(this);
     this.updatePeerStatus = this.updatePeerStatus.bind(this);
     this.updateAddress = this.updateAddress.bind(this);
     this.getAddressBalance = this.getAddressBalance.bind(this);
+    this.createChannel = this.createChannel.bind(this);
+    this.closeChannel = this.closeChannel.bind(this);
   }
 
   componentWillMount() {
@@ -99,7 +108,7 @@ class App extends Component {
         console.log(peer + ' has left');
       });
       
-      this.room.on('message', (message) => {
+      this.room.on('message', async (message) => {
         // Check if this is an introductory message
         if (this.isIntroductoryMessage(message.data.toString())) {
           // Check if peer is already known
@@ -119,18 +128,70 @@ class App extends Component {
         } else {
           // We don't want to broadcast to ourself
           if (message.from !== info.id) {
-            // Update Messages
-            let updatedMessages = this.state.messages;
-            updatedMessages.push(message);
-            this.setState({ messages: _.uniq(updatedMessages) });
+            console.log('message: ', message);
+            let parsedMessage = JSON.parse(message.data.toString());
+            console.log('parsedMessage: ', parsedMessage);
+            if (parsedMessage.eventType === 'CREATE') {
+              // Need to set selectedPeer as well
+              this.setState({ channelAddress: parsedMessage.channelAddress, channelBalance: parsedMessage.channelBalance, amount: 0, receiver: true, selectedPeer: this.state.peers[message.from].address })
+            } else if (parsedMessage.eventType === 'SIGN') {
+              // Update Messages
+              let updatedMessages = this.state.messages;
+              updatedMessages.push(message);
+              this.setState({ messages: updatedMessages });
+            } else if (parsedMessage.eventType === 'CLOSE') {
+              this.setState({ messages: [], receiver: false, channelAddress: null, channelBalance: null, amount: 0 });
+              let balance = await this.getAddressBalance(this.state.address);
+              this.setState({ balance });
+            }
           }
         }
       });
     }))
   }
 
-  handleMessage = event => {
-    this.room.sendTo(this.state.selectedPeer.id, this.state.message);
+  createChannel = async event => {
+    const { channelAddress, amount, address, selectedPeer } = this.state;
+    console.log('selectedPeer: ', selectedPeer);
+    // Default expiry of 10 minutes
+    this.simplePaymentChannelInstance = await this.simplePaymentChannelContract.new(selectedPeer.address, 600, { from: address, value: this.web3.utils.toWei(amount, 'ether') });
+    this.setState({ channelAddress: this.simplePaymentChannelInstance.address, channelBalance: this.web3.utils.toWei(amount, 'ether') });
+    console.log('this.simplePaymentChannelInstance: ', this.simplePaymentChannelInstance);
+    console.log('channelBalance', this.web3.utils.toWei(amount, 'ether'));
+    this.room.sendTo(selectedPeer.id, JSON.stringify({
+      eventType: 'CREATE',
+      channelAddress: this.simplePaymentChannelInstance.address,
+      channelBalance: this.web3.utils.toWei(amount, 'ether')
+    }));
+    this.setState({ amount: 0 });
+  }
+
+  createSignature = async event => {
+    const { channelAddress, amount, messages, address, selectedPeer } = this.state;
+    let message = await utils.constructPaymentMessage(channelAddress, this.web3.utils.toWei(amount, 'ether'));
+    let signature = await utils.signMessage(this.web3, message, address);
+    message = {
+      eventType: 'SIGN',
+      channelAddress: this.simplePaymentChannelInstance.address,
+      amount: this.web3.utils.toWei(amount, 'ether'),
+      signature
+    };
+    this.room.sendTo(selectedPeer.id, JSON.stringify(message));
+    let updatedMessages = messages;
+    updatedMessages.push(message);
+    this.setState({ messages: updatedMessages, amount: 0 });
+  }
+
+  closeChannel = async event => {
+    const { messages, address, selectedPeer } = this.state;
+    await this.simplePaymentChannelInstance.closeChannel(messages[messages.length - 1].amount, messages[messages.length - 1].signature, { from: address });
+    let message = {
+      eventType: 'CLOSE',
+      channelAddress: this.simplePaymentChannelInstance.address
+    };
+    let balance = await this.getAddressBalance(address);
+    this.setState({ messages: [], receiver: false, channelAddress: null, channelBalance: null, amount: 0, balance });
+    this.room.sendTo(selectedPeer.id, JSON.stringify(message));
   }
 
   selectPeer = event => {
@@ -170,7 +231,7 @@ class App extends Component {
 
   render() {
     const { classes } = this.props;
-    const { info, message, messages, selectedPeer, peers, address, balance } = this.state;
+    const { amount, info, messages, selectedPeer, peers, address, balance, channelAddress, receiver } = this.state;
 
     return (
       <div className={classes.root}>
@@ -203,7 +264,7 @@ class App extends Component {
             {messages.length > 0 &&
               <Grid item xs={8}>
                 <Card>
-                  <CardHeader title="Messages" />
+                  <CardHeader title="Channel Signatures" />
                   <CardContent>
                     <List dense={false} style={{ padding: 0 }}>
                       {messages.map(message => (
@@ -224,44 +285,62 @@ class App extends Component {
               </Grid>
             }
             <Grid item xs={8}>
-              <Card>
-                <CardHeader title="Compose Message" />
-                <CardContent>
-                  {_.keys(peers).length > 0 &&
-                    <FormControl fullWidth style={{ marginBottom: '16px' }}>
-                      <Select
-                        native
-                        onChange={this.selectPeer}
-                        input={<Input id="uncontrolled-native" />}
-                      >
-                        {_.map(peers, (peer, id) => (
-                          <option
-                            key={id}
-                            value={peer.address}
-                            style={{
-                              fontWeight:
-                                selectedPeer.id !== peer.id
-                                  ? theme.typography.fontWeightRegular
-                                  : theme.typography.fontWeightMedium
-                            }}
-                          >
-                            {`${peer.address} (${peer.online ? 'Online' : 'Offline'})`}
-                          </option>
-                        ))}
-                      </Select>
-                    </FormControl>
+              {channelAddress == null &&
+                <Card>
+                  <CardHeader title="Create Channel" />
+                  <CardContent>
+                    {_.keys(peers).length > 0 &&
+                      <FormControl fullWidth style={{ marginBottom: '16px' }}>
+                        <Select
+                          native
+                          onChange={this.selectPeer}
+                          input={<Input id="uncontrolled-native" />}
+                        >
+                          {_.map(peers, (peer, id) => (
+                            <option
+                              key={id}
+                              value={peer.address}
+                              style={{
+                                fontWeight:
+                                  selectedPeer.id !== peer.id
+                                    ? theme.typography.fontWeightRegular
+                                    : theme.typography.fontWeightMedium
+                              }}
+                            >
+                              {`${peer.address} (${peer.online ? 'Online' : 'Offline'})`}
+                            </option>
+                          ))}
+                        </Select>
+                      </FormControl>
                   }
                   <FormControl fullWidth style={{ marginBottom: '16px' }}>
-                    <InputLabel htmlFor="message">My Message</InputLabel>
-                    <Input id="message" multiline={true} value={message} onChange={(e) => this.setState({ message: e.target.value })} />
+                    <InputLabel htmlFor="amount">Amount</InputLabel>
+                    <Input id="amount" value={amount} onChange={(e) => this.setState({ amount: e.target.value })} />
                   </FormControl>
-                </CardContent>
-                <CardActions>
-                  <Button size="small" color="primary" disabled={_.keys(peers).length === 0 || selectedPeer === null || !selectedPeer.online || message.trim().length === 0} onClick={(e) => this.handleMessage(e)}>
-                    Send Message
-                  </Button>
-                </CardActions>
-              </Card>
+                  </CardContent>
+                  <CardActions>
+                    <Button size="small" color="primary" disabled={_.keys(peers).length === 0 || selectedPeer === null || !selectedPeer.online || amount < 1} onClick={(e) => this.createChannel(e)}>
+                      Create Channel
+                    </Button>
+                  </CardActions>
+                </Card>
+              }
+              {channelAddress != null && !receiver &&
+                <Card>
+                  <CardHeader title="Send Signature" />
+                  <CardContent>
+                    <FormControl fullWidth style={{ marginBottom: '16px' }}>
+                      <InputLabel htmlFor="amount">Amount</InputLabel>
+                      <Input id="amount" value={amount} onChange={(e) => this.setState({ amount: e.target.value })} />
+                    </FormControl>
+                  </CardContent>
+                  <CardActions>
+                    <Button size="small" color="primary" disabled={_.keys(peers).length === 0 || selectedPeer === null || !selectedPeer.online || amount <= 0} onClick={(e) => this.createSignature(e)}>
+                      Send Signature
+                    </Button>
+                  </CardActions>
+                </Card>
+              }
             </Grid>
           </Grid> :
           <LinearProgress />
