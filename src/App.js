@@ -84,12 +84,12 @@ class App extends Component {
       let accounts = await this.web3.eth.getAccounts();
       const currentPeerInfo = {
         id: info.id,
-        address: accounts[0],
+        address: accounts[0].toLowerCase(),
         online: true
       };
-      this.updateAddress(accounts[0]);
-
+      this.updateAddress(accounts[0].toLowerCase());
       let balance = await this.getAddressBalance(accounts[0]);
+
       this.setState({ balance });
 
       this.room = Room(this.ipfs, 'pubsub-payment-channel-demo');
@@ -100,12 +100,8 @@ class App extends Component {
       });
 
       this.room.on('peer left', (peer) => {
-        this.updatePeerStatus(peer, false);
-      });
-
-      this.room.on('peer left', (peer) => {
-        // Notify Peer has Left
-        console.log(peer + ' has left');
+        if (typeof peer !== 'undefined')
+          this.updatePeerStatus(peer, false);
       });
       
       this.room.on('message', async (message) => {
@@ -126,24 +122,23 @@ class App extends Component {
             }
           }
         } else {
-          // We don't want to broadcast to ourself
-          if (message.from !== info.id) {
-            console.log('message: ', message);
-            let parsedMessage = JSON.parse(message.data.toString());
-            console.log('parsedMessage: ', parsedMessage);
-            if (parsedMessage.eventType === 'CREATE') {
-              // Need to set selectedPeer as well
-              this.setState({ channelAddress: parsedMessage.channelAddress, channelBalance: parsedMessage.channelBalance, amount: 0, receiver: true, selectedPeer: this.state.peers[message.from].address })
-            } else if (parsedMessage.eventType === 'SIGN') {
-              // Update Messages
-              let updatedMessages = this.state.messages;
-              updatedMessages.push(message);
-              this.setState({ messages: updatedMessages });
-            } else if (parsedMessage.eventType === 'CLOSE') {
-              this.setState({ messages: [], receiver: false, channelAddress: null, channelBalance: null, amount: 0 });
-              let balance = await this.getAddressBalance(this.state.address);
-              this.setState({ balance });
-            }
+          console.log('message: ', message);
+          let parsedMessage = JSON.parse(message.data.toString());
+          console.log('parsedMessage: ', parsedMessage);
+          if (parsedMessage.eventType === 'CREATE') {
+            // Need to set selectedPeer as well
+            this.setState({ channelAddress: parsedMessage.channelAddress, channelBalance: parsedMessage.channelBalance, amount: 0, receiver: true, selectedPeer: this.state.peers[message.from] })
+            console.log('this.state: ', this.state);
+            this.simplePaymentChannelInstance = await this.simplePaymentChannelContract.at(parsedMessage.channelAddress);
+          } else if (parsedMessage.eventType === 'SIGN') {
+            // Update Messages
+            let updatedMessages = this.state.messages;
+            updatedMessages.push(message);
+            this.setState({ messages: updatedMessages });
+          } else if (parsedMessage.eventType === 'CLOSE') {
+            this.setState({ messages: [], receiver: false, channelAddress: null, channelBalance: null, amount: 0 });
+            let balance = await this.getAddressBalance(this.state.address);
+            this.setState({ balance });
           }
         }
       });
@@ -152,12 +147,9 @@ class App extends Component {
 
   createChannel = async event => {
     const { channelAddress, amount, address, selectedPeer } = this.state;
-    console.log('selectedPeer: ', selectedPeer);
     // Default expiry of 10 minutes
     this.simplePaymentChannelInstance = await this.simplePaymentChannelContract.new(selectedPeer.address, 600, { from: address, value: this.web3.utils.toWei(amount, 'ether') });
     this.setState({ channelAddress: this.simplePaymentChannelInstance.address, channelBalance: this.web3.utils.toWei(amount, 'ether') });
-    console.log('this.simplePaymentChannelInstance: ', this.simplePaymentChannelInstance);
-    console.log('channelBalance', this.web3.utils.toWei(amount, 'ether'));
     this.room.sendTo(selectedPeer.id, JSON.stringify({
       eventType: 'CREATE',
       channelAddress: this.simplePaymentChannelInstance.address,
@@ -176,16 +168,16 @@ class App extends Component {
       amount: this.web3.utils.toWei(amount, 'ether'),
       signature
     };
-    this.room.sendTo(selectedPeer.id, JSON.stringify(message));
-    let updatedMessages = messages;
-    updatedMessages.push(message);
-    this.setState({ messages: updatedMessages, amount: 0 });
+    this.room.broadcast(JSON.stringify(message));
   }
 
-  closeChannel = async event => {
+  closeChannel = async (event, message) => {
+    console.log('event: ', event);
+    console.log('message: ', message);
+    console.log('this.simplePaymentChannelInstance: ', this.simplePaymentChannelInstance);
     const { messages, address, selectedPeer } = this.state;
-    await this.simplePaymentChannelInstance.closeChannel(messages[messages.length - 1].amount, messages[messages.length - 1].signature, { from: address });
-    let message = {
+    await this.simplePaymentChannelInstance.closeChannel(message.amount, message.signature, { from: address, gas: 2100000, gasPrice: 20000000000 });
+    message = {
       eventType: 'CLOSE',
       channelAddress: this.simplePaymentChannelInstance.address
     };
@@ -209,10 +201,10 @@ class App extends Component {
     this.setState({ peers: updatedPeers });
   };
 
-  isIntroductoryMessage = msg => {
+  isIntroductoryMessage = message => {
     try {
-      let parsedMsg = JSON.parse(msg);
-      return _.difference(['address', 'id', 'online'], _.keys(parsedMsg)).length === 0
+      let parsedMessage = JSON.parse(message);
+      return _.difference(['address', 'id', 'online'], _.keys(parsedMessage)).length === 0
     } catch (e) {
       return false;
     }
@@ -272,11 +264,20 @@ class App extends Component {
                           key={messages.indexOf(message)}
                           divider
                           disableGutters
-                        >
-                          <ListItemText
-                            primary={peers[message.from].address}
-                            secondary={message.data.toString()}
-                          />
+                      >
+                        <Card>
+                          <CardHeader title={`Message #${messages.indexOf(message)}`} />
+                          <CardContent>
+                            <pre>{JSON.stringify(JSON.parse(message.data.toString()), null, 2)}</pre>
+                          </CardContent>
+                          { receiver &&
+                            <CardActions>
+                            <Button size="small" color="primary" onClick={(e) => this.closeChannel(e, JSON.parse(message.data.toString()))}>
+                                Close Channel
+                              </Button>
+                            </CardActions>
+                          }
+                        </Card>
                         </ListItem>
                       ))}
                     </List>

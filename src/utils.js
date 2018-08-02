@@ -14,9 +14,9 @@ const constructPaymentMessage = async function (contractAddress, balance) {
 }
 
 const signMessage = async function (web3, message, accountAddress) {
-  return await web3.eth.sign(
-    accountAddress,
-    `0x${message.toString("hex")}`
+  return await web3.eth.personal.sign(
+    `0x${message.toString("hex")}`,
+    accountAddress
   );
 }
 
