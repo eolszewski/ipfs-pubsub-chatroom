@@ -59,7 +59,6 @@ class App extends Component {
       channelAddress: null,
       balance: null,
       channelBalance: null,
-      message: '',
       messages: [],
       selectedPeer: {},
       peers: {},
@@ -71,7 +70,7 @@ class App extends Component {
     this.isIntroductoryMessage = this.isIntroductoryMessage.bind(this);
     this.updatePeerStatus = this.updatePeerStatus.bind(this);
     this.updateAddress = this.updateAddress.bind(this);
-    this.getAddressBalance = this.getAddressBalance.bind(this);
+    this.updateAddressBalance = this.updateAddressBalance.bind(this);
     this.createChannel = this.createChannel.bind(this);
     this.closeChannel = this.closeChannel.bind(this);
   }
@@ -88,9 +87,7 @@ class App extends Component {
         online: true
       };
       this.updateAddress(accounts[0].toLowerCase());
-      let balance = await this.getAddressBalance(accounts[0]);
-
-      this.setState({ balance });
+      await this.updateAddressBalance(accounts[0]);
 
       this.room = Room(this.ipfs, 'pubsub-payment-channel-demo');
 
@@ -100,8 +97,7 @@ class App extends Component {
       });
 
       this.room.on('peer left', (peer) => {
-        if (typeof peer !== 'undefined')
-          this.updatePeerStatus(peer, false);
+        this.updatePeerStatus(peer, false);
       });
       
       this.room.on('message', async (message) => {
@@ -137,8 +133,7 @@ class App extends Component {
             this.setState({ messages: updatedMessages });
           } else if (parsedMessage.eventType === 'CLOSE') {
             this.setState({ messages: [], receiver: false, channelAddress: null, channelBalance: null, amount: 0 });
-            let balance = await this.getAddressBalance(this.state.address);
-            this.setState({ balance });
+            await this.updateAddressBalance(this.state.address);
           }
         }
       });
@@ -150,11 +145,13 @@ class App extends Component {
     // Default expiry of 10 minutes
     this.simplePaymentChannelInstance = await this.simplePaymentChannelContract.new(selectedPeer.address, 600, { from: address, value: this.web3.utils.toWei(amount, 'ether') });
     this.setState({ channelAddress: this.simplePaymentChannelInstance.address, channelBalance: this.web3.utils.toWei(amount, 'ether') });
-    this.room.sendTo(selectedPeer.id, JSON.stringify({
+    await this.updateAddressBalance(address);
+    let message = {
       eventType: 'CREATE',
       channelAddress: this.simplePaymentChannelInstance.address,
       channelBalance: this.web3.utils.toWei(amount, 'ether')
-    }));
+    };
+    this.room.sendTo(selectedPeer.id, JSON.stringify(message));
     this.setState({ amount: 0 });
   }
 
@@ -172,17 +169,14 @@ class App extends Component {
   }
 
   closeChannel = async (event, message) => {
-    console.log('event: ', event);
-    console.log('message: ', message);
-    console.log('this.simplePaymentChannelInstance: ', this.simplePaymentChannelInstance);
     const { messages, address, selectedPeer } = this.state;
     await this.simplePaymentChannelInstance.closeChannel(message.amount, message.signature, { from: address, gas: 2100000, gasPrice: 20000000000 });
+    this.setState({ messages: [], receiver: false, channelAddress: null, channelBalance: null, amount: 0 });
+    await this.updateAddressBalance(address);
     message = {
       eventType: 'CLOSE',
       channelAddress: this.simplePaymentChannelInstance.address
     };
-    let balance = await this.getAddressBalance(address);
-    this.setState({ messages: [], receiver: false, channelAddress: null, channelBalance: null, amount: 0, balance });
     this.room.sendTo(selectedPeer.id, JSON.stringify(message));
   }
 
@@ -216,9 +210,10 @@ class App extends Component {
     })
   }
 
-  getAddressBalance = async address => {
+  updateAddressBalance = async address => {
     let balance = await this.web3.eth.getBalance(address);
-    return this.web3.utils.fromWei(balance, 'ether');
+    this.setState({ balance: this.web3.utils.fromWei(balance, 'ether') });
+    console.log('this.state: ', this.state);
   }
 
   render() {
