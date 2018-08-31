@@ -21,7 +21,7 @@ yarn build
 
 To run:
 ```
-npm run start
+yarn start
 ```
 
 Here's a video of it working in an incognito chrome tab, a normal chrome tab, and a brave tab.
