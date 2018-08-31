@@ -260,12 +260,38 @@ module.exports = {
     // Otherwise React will be compiled in the very slow development mode.
     new webpack.DefinePlugin(env.stringified),
     // Minify the code.
-    new UglifyJSPlugin({
+    new UglifyJsPlugin({
+      // see: https://github.com/webpack-contrib/uglifyjs-webpack-plugin#options
+      cache: true,
+      parallel: true,
+
+      // see: https://github.com/mishoo/UglifyJS2/tree/harmony#minify-options
       uglifyOptions: {
-        beautify: false,
-        ecma: 6,
-        compress: { unused: false },
-        comments: false
+        compress: {
+          // Needed to minify js-ipfs, see: https://github.com/ipfs/aegir/pull/214
+          unused: false,
+          // Needed to minify js-ipfs until v0.29 see: https://github.com/ipfs/js-ipfs/issues/1321
+          keep_classnames: true,
+          // Disabled because of an issue with Uglify breaking seemingly valid code:
+          // https://github.com/facebookincubator/create-react-app/issues/2376
+          // Pending further investigation:
+          // https://github.com/mishoo/UglifyJS2/issues/2011
+          comparisons: false,
+          // don't display warnings when dropping unreachable code
+          warnings: false,
+        },
+        mangle: {
+          // Needed to minify js-ipfs until v0.29 see: https://github.com/ipfs/js-ipfs/issues/1321
+          keep_classnames: true,
+          safari10: true,
+        },
+        output: {
+          comments: false,
+          // Turned on because emoji and regex is not minified properly using default
+          // https://github.com/facebookincubator/create-react-app/issues/2488
+          ascii_only: true,
+        },
+        sourceMap: shouldUseSourceMap,
       }
     }),
     // Note: this won't work without ExtractTextPlugin.extract(..) in `loaders`.
