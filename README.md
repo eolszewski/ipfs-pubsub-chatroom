@@ -10,12 +10,17 @@ Please use Chrome, Brave, or Mozilla when running this.
 
 To install:
 ```
-npm i
+yarn
 ```
+
+To build:
+```
+yarn build
+```
+**Note: This will give you an error `./node_modules/cids/src/index.js:24`, but this can be ignored, it will not affect the app.**
 
 To run:
 ```
-npm run build
 npm run start
 ```
 
